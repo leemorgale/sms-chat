@@ -27,59 +27,6 @@ A modern web application that enables group chat functionality over SMS, built w
   <img src="media/backend-logs.png" alt="Backend logs (mock SMS)" width="280" />
 </p>
 
-### 2) Fix React Router future flag warnings
-Add future flags to your router in `frontend/src/App.tsx`:
-```tsx
-// change this ...
-<Router>
-
-// to this ...
-<Router
-  future={{
-    v7_startTransition: true,
-    v7_relativeSplatPath: true,
-  }}
->
-```
-
-### 3) Quiet the “invalid JSON” console error in tests (optional)
-In the specific test that intentionally loads invalid JSON (Vitest), temporarily silence `console.error`:
-```ts
-const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-try {
-  // ... render and run this test block ...
-} finally {
-  errorSpy.mockRestore();
-}
-```
-
-- Place that in `src/test/App.test.tsx` inside the “does not crash when localStorage contains invalid JSON” test. Tests already pass; this just cleans noisy logs.
-
-- Commit assets and README:
-```bash
-git add README.md docs/images/*.png
-git commit -m "Add demo video & screenshots at top of README; enable router future flags; quiet test console error"
-```
-
-- If `vid.mp4` is large (>100MB), consider Git LFS:
-```bash
-git lfs install
-git lfs track "*.mp4"
-git add .gitattributes vid.mp4
-git commit -m "Track demo video with Git LFS"
-```
-
-- Re-run tests:
-```bash
-make test-frontend
-```
-
-- Everything important:
-  - README now shows video and screenshots at the top.
-  - Router warnings removed by adding `future` flags.
-  - Optional test log noise suppressed via `console.error` spy.
-
 ## 🚀 Quick Start
 
 ### First Time Setup
