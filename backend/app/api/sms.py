@@ -1,49 +1,98 @@
-from fastapi import APIRouter, Depends, HTTPException, Form
+from fastapi import APIRouter, Depends, Form
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.models import User, Group, Message
-from app.models.schemas import MessageCreate
+from app.models.phone_pool import PhoneNumber, PhoneStatus
 from app.services.sms_service import send_group_message, parse_sms_command
 
 router = APIRouter()
+
 
 @router.post("/webhook")
 def handle_sms_webhook(
     From: str = Form(...),
     Body: str = Form(...),
     To: str = Form(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.phone_number == From).first()
     if not user:
         return {"message": "User not registered"}
-    
-    active_groups = user.groups
-    if not active_groups:
-        return {"message": "You are not in any groups. Join a group first!"}
-    
-    if len(active_groups) == 1:
-        group = active_groups[0]
-    else:
-        group_name, message_body = parse_sms_command(Body)
+
+    target_group = None
+    group_phone_for_sending = None
+    content = Body
+
+    # Route by assigned pool phone if available
+    phone_record = db.query(PhoneNumber).filter(
+        PhoneNumber.phone_number == To
+    ).first()
+    if (
+        phone_record
+        and phone_record.status == PhoneStatus.ASSIGNED
+        and phone_record.group_id
+    ):
+        target_group = db.query(Group).filter(
+            Group.id == phone_record.group_id
+        ).first()
+        if target_group and user not in target_group.users:
+            return {
+                "message": (
+                    f"You are not a member of the "
+                    f"'{target_group.name}' group"
+                )
+            }
+        group_phone_for_sending = To
+
+    # Fallback: support @"Group Name" or single-group routing
+    if not target_group:
+        group_name, stripped = parse_sms_command(Body)
         if group_name:
-            group = next((g for g in active_groups if g.name.lower() == group_name.lower()), None)
-            if not group:
-                return {"message": f"Group '{group_name}' not found"}
-            Body = message_body
+            for g in list(user.groups):
+                if g.name.lower() == group_name.lower():
+                    target_group = g
+                    content = stripped
+                    break
+            if not target_group:
+                return {
+                    "message": (
+                        f"Group '{group_name}' not found or you are "
+                        f"not a member"
+                    )
+                }
         else:
-            group = active_groups[0]
-    
+            if len(user.groups) == 1:
+                target_group = user.groups[0]
+            else:
+                return {
+                    "message": (
+                        'Multiple groups detected. Prefix message with '
+                        '@"Group Name" to specify destination.'
+                    )
+                }
+
+    if not target_group:
+        return {"message": "Group not found for this number"}
+
     db_message = Message(
-        content=Body,
-        user_id=user.id,
-        group_id=group.id
+        content=content, user_id=user.id, group_id=target_group.id
     )
     db.add(db_message)
     db.commit()
-    
-    for member in group.users:
+
+    if not group_phone_for_sending and target_group.phone_number_rel:
+        group_phone_for_sending = (
+            target_group.phone_number_rel.phone_number
+        )
+
+    for member in target_group.users:
         if member.id != user.id:
-            send_group_message(member.phone_number, user.name, Body, group.name)
-    
-    return {"message": "Message sent to group"}
+            send_group_message(
+                member.phone_number,
+                user.name,
+                content,
+                target_group.name,
+                group_phone_for_sending,
+            )
+
+    return {"message": f"Message sent to {target_group.name} group"}
